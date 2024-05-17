@@ -9,9 +9,9 @@ defaults:
 
 # Wandb config
 wandb:
-  use_wandb: false
-  project: brainmagick
-  group: brainmagick-group
+  use_wandb: true
+  project: fMRI-decoding
+  group: louisjalouzot
 
 # Logging and printing, and does not impact training
 num_prints: 5
@@ -32,7 +32,7 @@ continue_best: true  # continue from best, not last state if continue_from is se
 # Other stuff
 seed: 2036
 dummy:  # use this if you want twice the same exp, with a different name
-cache: ./cache
+cache: ./.cache
 features_models: ./features_models
 early_stop_patience: 10  # number of epochs to wait before early stop
 eval_every: 1

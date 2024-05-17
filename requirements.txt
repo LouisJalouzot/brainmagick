@@ -19,7 +19,7 @@ flake8
 mypy
 numpy
 types-PyYAML
-spacy<2.4.0
+spacy
 wandb
 numba
 mne_bids  # for gwilliams2022 dataset

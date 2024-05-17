@@ -41,14 +41,22 @@ dynamic of the contrastive loss), see after.
 
 You can create a new conda environment and install the required dependencies
 ```shell
-conda create -n bm ipython python=3.8 -y
-conda activate bm
-conda install pytorch torchaudio cudatoolkit=11.3 -c pytorch -y
+python3.12 -m venv .venv
+source .venv/bin/activate
 pip install -U -r requirements.txt
 pip install -e .
 # For the Broderick dataset, you will further need the following model.
-python -m spacy download en_core_web_md
+# python -m spacy download en_core_web_md
 ```
+Might need
+```shell
+sudo apt install libsox-dev
+```
+To download openneuro datasets
+```shell
+sudo apt install datalad
+```
+
 You can adapt the cudatoolkit version to fit your installation.
 
 This code has only been tested on Ubuntu 20.04. Installation should take
