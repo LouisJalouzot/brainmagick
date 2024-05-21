@@ -14,14 +14,14 @@ The class `Event` and its children (e.g. `Sound`, `Word`, etc.) define the expec
 event kind.
 """
 
-import random
 import hashlib
+import random
 import typing as tp
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
-from dataclasses import dataclass, fields, asdict
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 import torchaudio
 from dora import to_absolute_path
 
@@ -35,6 +35,7 @@ class Event:
     If the event is instantiated with `from_dict()`, additional non-required fields that are
     provided will be ignored instead of causing an error.
     """
+
     start: float
     duration: float
     modality: tp.Optional[str]  # Move to keyword arguments when updating to 3.10
@@ -48,9 +49,10 @@ class Event:
 
     @classmethod
     def from_dict(cls, row: dict) -> "Event":
-        """Create event from dictionary while ignoring extra parameters.
-        """
-        return cls(**{k: v for k, v in row.items() if k in [f.name for f in fields(cls)]})
+        """Create event from dictionary while ignoring extra parameters."""
+        return cls(
+            **{k: v for k, v in row.items() if k in [f.name for f in fields(cls)]}
+        )
 
     @classmethod
     def _kind(cls) -> str:
@@ -68,8 +70,8 @@ class Event:
 
 @dataclass
 class DataSlice(Event):
-    """Event describing a slice of data with methods to find out overlap with other events.
-    """
+    """Event describing a slice of data with methods to find out overlap with other events."""
+
     sample_rate: float
 
     def __post_init__(self):
@@ -78,20 +80,22 @@ class DataSlice(Event):
         self._parent: tp.Optional["DataSlice"] = None
 
     def overlap(self, event: Event) -> "DataSlice":
-        """Creates new DataSlice that only contains the overlap with the provided event.
-        """
+        """Creates new DataSlice that only contains the overlap with the provided event."""
         start = max(self.start, event.start)
         stop = min(self.stop, event.stop)
         out = self.__class__(
-            start=start, duration=stop - start, sample_rate=self.sample_rate,
-            language=self.language, modality=self.modality)
+            start=start,
+            duration=stop - start,
+            sample_rate=self.sample_rate,
+            language=self.language,
+            modality=self.modality,
+        )
         out._sample_rate = self._sample_rate  # XXX Necessary?
         out._parent = self
         return out
 
     def slice_in_parent(self) -> slice:
-        """Provides slice with respect to the parent DataSlice to position the feature correctly.
-        """
+        """Provides slice with respect to the parent DataSlice to position the feature correctly."""
         assert self._parent is not None
         start = self.start_ind - self._parent.start_ind
         return slice(start, start + self.duration_ind)
@@ -113,8 +117,8 @@ class DataSlice(Event):
 
 @dataclass
 class Sound(Event):
-    """Event corresponding to an audio recording saved as a WAV file.
-    """
+    """Event corresponding to an audio recording saved as a WAV file."""
+
     filepath: str
     offset: float = 0.0
 
@@ -124,11 +128,11 @@ class Sound(Event):
         if np.isnan(self.offset):  # can happen if not specified
             # NOTE: Offset is used when splitting WAVs to avoid block boundary overlap.
             self.offset = 0.0
-        if 'MOCK_CACHE' in self.filepath:
+        if "MOCK_CACHE" in self.filepath:
             assert self.duration is not None
             actual_duration = self.duration
         else:
-            assert Path(self.filepath).exists(), f'{self.filepath} does not exist.'
+            assert Path(self.filepath).exists(), f"{self.filepath} does not exist."
             info = torchaudio.info(self.filepath)
             actual_duration = float(info.num_frames / info.sample_rate) - self.offset
             if self.duration is None or self.duration == 0:
@@ -146,27 +150,28 @@ class Word(Event):
     See function `bm.events::extract_word_sequence_info` to compute fields `word_index` and
     `word_sequence` from a `sequence_id` field.
     """
+
     word: str  # the actual word
     word_index: int  # index of the word in the sequence
     word_sequence: str  # sequence of words the word is part of
 
     def __post_init__(self):
         super().__post_init__()
-        assert self.modality in ['audio', 'visual']
+        assert self.modality in ["audio", "visual"]
         self.word_index = int(self.word_index)
 
 
 @dataclass
 class Phoneme(Event):
-    """Event corresponding to a phoneme utterance.
-    """
+    """Event corresponding to a phoneme utterance."""
+
     phoneme_id: int
 
 
 @dataclass
 class MultipleWords(Event):
-    """Event corresponding to multiple words presented at once on the screen.
-    """
+    """Event corresponding to multiple words presented at once on the screen."""
+
     words: str
 
 
@@ -177,15 +182,15 @@ class Motor(Event):
 
 @dataclass
 class Special(Event):
-    """Special event for things we don't know yet how to deal with.
-    """
+    """Special event for things we don't know yet how to deal with."""
+
     name: str
 
 
 @dataclass
 class Block(Event):
-    """Event corresponding to a block, defined by a start, a duration and a unique identifier.
-    """
+    """Event corresponding to a block, defined by a start, a duration and a unique identifier."""
+
     uid: str
 
     def __post_init__(self):
@@ -195,8 +200,10 @@ class Block(Event):
 
 # Functions for processing events into blocks
 
-def extract_sequence_info(events: pd.DataFrame, word: bool = True,
-                          phoneme: bool = True) -> pd.DataFrame:
+
+def extract_sequence_info(
+    events: pd.DataFrame, word: bool = True, phoneme: bool = True
+) -> pd.DataFrame:
     """Extract word and/or phoneme sequence-related information from an events DataFrame.
 
     Extract information about word and/or phoneme sequences from an events DataFrame. Columns
@@ -220,21 +227,26 @@ def extract_sequence_info(events: pd.DataFrame, word: bool = True,
     -------
     Updated DataFrame of events.
     """
+
     def is_missing(df, key):
         return key not in df.columns or all(df[key].isnull())
 
     events_out = events.copy()
 
-    if word and (events.kind == 'word').any():
-        missing_cols = [col for col in ['sequence_id', 'word'] if col not in events.columns]
+    if word and (events.kind == "word").any():
+        missing_cols = [
+            col for col in ["sequence_id", "word"] if col not in events.columns
+        ]
         if missing_cols:
-            raise ValueError(f'Columns \"{missing_cols}\" are required but were not found.')
+            raise ValueError(
+                f'Columns "{missing_cols}" are required but were not found.'
+            )
 
-        is_word = events.kind.isin(['word', 'multiplewords'])
+        is_word = events.kind.isin(["word", "multiplewords"])
         words = events.loc[is_word]
 
         if words.sequence_id.nunique() < 2:
-            raise ValueError('Only one word sequence ID found.')
+            raise ValueError("Only one word sequence ID found.")
 
         for _, d in words.groupby("sequence_id"):
             # define word indices by making it compatible for multiple words
@@ -246,14 +258,14 @@ def extract_sequence_info(events: pd.DataFrame, word: bool = True,
                 for uid in d.index:
                     events_out.loc[uid, "word_sequence"] = " ".join(d.word.values)
 
-    if phoneme and (events.kind == 'phoneme').any():
-        phonemes = events_out[events_out.kind == 'phoneme']
-        if is_missing(phonemes, 'word_index'):
-            raise ValueError('Column \"word_index\" is required but was not found.')
+    if phoneme and (events.kind == "phoneme").any():
+        phonemes = events_out[events_out.kind == "phoneme"]
+        if is_missing(phonemes, "word_index"):
+            raise ValueError('Column "word_index" is required but was not found.')
 
-        for _, group in phonemes.groupby(['sequence_id', 'word_index']):
-            if is_missing(group, 'phoneme_id'):
-                events_out.loc[group.index, 'phoneme_id'] = range(len(group))
+        for _, group in phonemes.groupby(["sequence_id", "word_index"]):
+            if is_missing(group, "phoneme_id"):
+                events_out.loc[group.index, "phoneme_id"] = range(len(group))
 
     return events_out
 
@@ -264,23 +276,28 @@ def _get_block_uid(events: pd.DataFrame) -> str:
     The unique ID of a block is either the concatenation of the words or filepaths it contains, or,
     if available and unique, the value in the 'sequence_uid' column.
     """
-    if 'sequence_uid' in events.columns:  # Use existing sequence_uid, e.g. with Schoffelen2019
+    if (
+        "sequence_uid" in events.columns
+    ):  # Use existing sequence_uid, e.g. with Schoffelen2019
         unique_sequence_uids = events.sequence_uid.unique()
         if len(unique_sequence_uids) == 1:
             uid = unique_sequence_uids[0]
             return uid
 
     # Use concatenation of words or filepaths
-    has_words = \
-        events.condition.isin(EventAccessor.WORD_CONDITIONS) & (events.kind != 'phoneme')
+    has_words = events.condition.isin(EventAccessor.WORD_CONDITIONS) & (
+        events.kind != "phoneme"
+    )
     if not any(has_words):  # Use filepaths if there are no words in the block
         uid_ = [f for f in events.filepath.unique() if isinstance(f, str)]
-        assert len(uid_), 'No filepath information available for defining block unique ID.'
+        assert len(
+            uid_
+        ), "No filepath information available for defining block unique ID."
         uid_ += [str(events.start.min())]
     else:
         uid_ = events.loc[has_words].word.astype(str)
 
-    uid = ' '.join(uid_)
+    uid = " ".join(uid_)
 
     return uid
 
@@ -304,8 +321,9 @@ def _create_blocks(events: pd.DataFrame, groupby: str) -> pd.DataFrame:
     -------
     Updated events DataFrame that contains the created blocks.
     """
-    assert groupby in EventAccessor.VALID_BLOCK_TYPES, \
-        f'by={groupby} not supported, must be one of {EventAccessor.VALID_BLOCK_TYPES}.'
+    assert (
+        groupby in EventAccessor.VALID_BLOCK_TYPES
+    ), f"by={groupby} not supported, must be one of {EventAccessor.VALID_BLOCK_TYPES}."
 
     # Find events that are valid block starts
     blocks = list()
@@ -316,10 +334,12 @@ def _create_blocks(events: pd.DataFrame, groupby: str) -> pd.DataFrame:
             block_start = event.kind == "sound"
         elif groupby == "fixation":
             block_start = event.condition == "fixation"
-        elif groupby == 'sentence_or_sound':  # Used for Schoffelen2019
-            block_start = (event.kind == 'sound') or (
-                (event.kind == 'word') and (event.modality == 'visual') and
-                (event.word_index == 0))
+        elif groupby == "sentence_or_sound":  # Used for Schoffelen2019
+            block_start = (event.kind == "sound") or (
+                (event.kind == "word")
+                and (event.modality == "visual")
+                and (event.word_index == 0)
+            )
         else:
             block_start = False
 
@@ -339,25 +359,37 @@ def _create_blocks(events: pd.DataFrame, groupby: str) -> pd.DataFrame:
         mask = (events.start >= block.start) & ((events.start + events.duration) < stop)
         uid = _get_block_uid(events[mask])
         block_info = asdict(  # Convert to Block object to apply checks
-            Block(start=block.start, duration=stop - block.start, uid=uid,
-                  language=block.language, modality=block.modality))
+            Block(
+                start=block.start,
+                duration=stop - block.start,
+                uid=uid,
+                language=block.language,
+                modality=block.modality,
+            )
+        )
         block_events.append(block_info)
 
     blocks_df = pd.DataFrame(block_events)
-    blocks_df['kind'] = 'block'
-    blocks_df.duration.iat[-1] = float('inf')  # For compatibility with old API - last block has
+    blocks_df["kind"] = "block"
+    blocks_df.duration.iat[-1] = float(
+        "inf"
+    )  # For compatibility with old API - last block has
     # infinite duration
 
     # Sort by start time
     events = pd.concat([events, blocks_df], axis=0, ignore_index=True)
-    events.loc[events.kind == "block", "start"] -= eps  # Make sure blocks come before their events
+    events.loc[
+        events.kind == "block", "start"
+    ] -= eps  # Make sure blocks come before their events
     events = events.sort_values("start", ignore_index=True)
     events.loc[events.kind == "block", "start"] += eps  # Move back to real start time
 
     return events
 
 
-def _merge_blocks(blocks: pd.DataFrame, min_block_duration_s: float = 60) -> pd.DataFrame:
+def _merge_blocks(
+    blocks: pd.DataFrame, min_block_duration_s: float = 60
+) -> pd.DataFrame:
     """Merge consecutive blocks until the minimum duration has been reached.
 
     Parameters
@@ -382,24 +414,35 @@ def _merge_blocks(blocks: pd.DataFrame, min_block_duration_s: float = 60) -> pd.
         is_last = k == len(blocks) - 1
         stop = block.start + block.duration
         if is_last or stop > start + min_block_duration_s:  # Record a merged block
-            uid = ','.join(uids)
+            uid = ",".join(uids)
             new_block = asdict(  # Convert to Block object to apply checks
-                Block(start=start, duration=stop - start, uid=uid, language=block.language,
-                      modality=block.modality))
+                Block(
+                    start=start,
+                    duration=stop - start,
+                    uid=uid,
+                    language=block.language,
+                    modality=block.modality,
+                )
+            )
             new_blocks.append(new_block)
             uids, start = list(), stop
     assert not uids, "All blocks should have been included"
     new_blocks_df = pd.DataFrame(new_blocks)
-    new_blocks_df['kind'] = 'block'
-    assert hasattr(new_blocks_df, 'duration')  # For mypy
+    new_blocks_df["kind"] = "block"
+    assert hasattr(new_blocks_df, "duration")  # For mypy
     if any(new_blocks_df.duration[:-1] < min_block_duration_s):
-        raise ValueError(f'Some blocks are smaller than {min_block_duration_s}.')
+        raise ValueError(f"Some blocks are smaller than {min_block_duration_s}.")
 
     return new_blocks_df
 
 
-def assign_blocks(blocks: pd.DataFrame, ratios: tp.List[float], seed: int,
-                  remove_ratio: float = 0, min_n_blocks_per_split: int = 20) -> pd.DataFrame:
+def assign_blocks(
+    blocks: pd.DataFrame,
+    ratios: tp.List[float],
+    seed: int,
+    remove_ratio: float = 0,
+    min_n_blocks_per_split: int = 20,
+) -> pd.DataFrame:
     """Randomly assign blocks to subsets approximately respecting the given `ratios`.
 
     This will return `len(ratios) + 1` subsets, with the last subset containing whatever wasn't
@@ -425,12 +468,12 @@ def assign_blocks(blocks: pd.DataFrame, ratios: tp.List[float], seed: int,
     Updated DataFrame of blocks, with additional column 'split' indicating which subset each block
     was assigned to.
     """
-    if remove_ratio > 0.:
+    if remove_ratio > 0.0:
         ratios = ratios + [remove_ratio]
 
     assert all(ratio > 0 for ratio in ratios)
-    assert sum(ratios) < 1., "last dataset has negative ratio size"
-    ratios.append(1. - sum(ratios))
+    assert sum(ratios) < 1.0, "last dataset has negative ratio size"
+    ratios.append(1.0 - sum(ratios))
     cdf = np.cumsum(ratios)
 
     split = list()
@@ -446,23 +489,26 @@ def assign_blocks(blocks: pd.DataFrame, ratios: tp.List[float], seed: int,
 
     assert len(split) == len(blocks)
     assigned_blocks = blocks.copy()
-    assigned_blocks['split'] = split
+    assigned_blocks["split"] = split
 
     if (assigned_blocks.split.value_counts() < min_n_blocks_per_split).any():
         raise ValueError(
-            f'At least one of the splits has fewer than {min_n_blocks_per_split} blocks.')
+            f"At least one of the splits has fewer than {min_n_blocks_per_split} blocks."
+        )
 
-    if remove_ratio > 0.:  # Drop blocks to be removed and adjust split numbers
+    if remove_ratio > 0.0:  # Drop blocks to be removed and adjust split numbers
         remove_ratio_ind = len(ratios) - 2
         assigned_blocks = assigned_blocks[assigned_blocks.split != remove_ratio_ind]
         assigned_blocks.split = assigned_blocks.split.map(
-            lambda x: x - 1 if x > remove_ratio_ind else x)
+            lambda x: x - 1 if x > remove_ratio_ind else x
+        )
 
     return assigned_blocks
 
 
-def split_wav_as_block(events: pd.DataFrame, blocks: tp.List[tp.Tuple[float, float]],
-                       margin: float = 0.1) -> pd.DataFrame:
+def split_wav_as_block(
+    events: pd.DataFrame, blocks: tp.List[tp.Tuple[float, float]], margin: float = 0.1
+) -> pd.DataFrame:
     """Split sound events so that they do not overlap block boundaries.
 
     This makes sure there is no contamination across train/valid/test splits of audio features.
@@ -481,12 +527,14 @@ def split_wav_as_block(events: pd.DataFrame, blocks: tp.List[tp.Tuple[float, flo
     ------
     Updated DataFrame containing split sound events.
     """
-    if 'offset' not in events:
-        events['offset'] = 0.
+    if "offset" not in events:
+        events["offset"] = 0.0
 
-    sound_mask = events.kind == 'sound'
+    sound_mask = events.kind == "sound"
     other_events = events[~sound_mask]
-    events_queue = [event for _, event in events[sound_mask].iterrows()]  # Benchmarked - iterrows
+    events_queue = [
+        event for _, event in events[sound_mask].iterrows()
+    ]  # Benchmarked - iterrows
     # is fine here
 
     new_events = list()
@@ -517,12 +565,12 @@ def split_wav_as_block(events: pd.DataFrame, blocks: tp.List[tp.Tuple[float, flo
                 events_queue.insert(0, new_event)
             new_events.append(event)
     events = pd.concat([pd.DataFrame(new_events + events_queue), other_events])
-    events = events.sort_values('start', ignore_index=True)
+    events = events.sort_values("start", ignore_index=True)
 
     return events
 
 
-@pd.api.extensions.register_dataframe_accessor('event')
+@pd.api.extensions.register_dataframe_accessor("event")
 class EventAccessor:
     """Accessor for event information stored as a pandas DataFrame.
 
@@ -532,17 +580,18 @@ class EventAccessor:
 
     For more information about events and the `EventAccessor`, see `doc/recordings_and_events.md`.
     """
+
     CLASS_KIND_MAPPING = {
-        'word': Word,
-        'multiple_words': MultipleWords,
-        'sound': Sound,
-        'phoneme': Phoneme,
-        'motor': Motor,
-        'special': Special,
-        'block': Block
+        "word": Word,
+        "multiple_words": MultipleWords,
+        "sound": Sound,
+        "phoneme": Phoneme,
+        "motor": Motor,
+        "special": Special,
+        "block": Block,
     }
-    WORD_CONDITIONS = {'sentence', 'context', 'question', 'fixation', 'word_list'}
-    VALID_BLOCK_TYPES = {'sentence', 'sound', 'sentence_or_sound'}
+    WORD_CONDITIONS = {"sentence", "context", "question", "fixation", "word_list"}
+    VALID_BLOCK_TYPES = {"sentence", "sound", "sentence_or_sound"}
 
     def __init__(self, frame: pd.DataFrame) -> None:
         self._frame = frame
@@ -562,8 +611,8 @@ class EventAccessor:
         """
         if kind is not None:
             event_class = cls.CLASS_KIND_MAPPING[kind]
-            required_fields = ['kind'] + [field.name for field in fields(event_class)]
-            msg = f'{kind} event: {required_fields}'
+            required_fields = ["kind"] + [field.name for field in fields(event_class)]
+            msg = f"{kind} event: {required_fields}"
             print(msg)
         else:
             for kind in cls.CLASS_KIND_MAPPING.keys():
@@ -576,10 +625,11 @@ class EventAccessor:
         the validation, and then updating the input with the applied changes (if any).
         """
         # Check kinds are valid
-        if event['kind'] not in self.CLASS_KIND_MAPPING.keys():
+        if event["kind"] not in self.CLASS_KIND_MAPPING.keys():
             raise ValueError(
-                f'Unexpected kind \"{event["kind"]}\". Support for new event kinds can be added by'
-                ' creating new `Event` classes in `bm.events`.')
+                f'Unexpected kind "{event["kind"]}". Support for new event kinds can be added by'
+                " creating new `Event` classes in `bm.events`."
+            )
 
         # Build event object to run the checks inside the kind-specific Event class
         event_class: tp.Type[Event] = self.CLASS_KIND_MAPPING[event.kind]
@@ -600,13 +650,14 @@ class EventAccessor:
             DataFrame in which each row has been validated and updated accordingly.
         """
         if not self._frame.empty:
-            return pd.DataFrame(self._frame.apply(self._validate_event, axis=1).tolist())
+            return pd.DataFrame(
+                self._frame.apply(self._validate_event, axis=1).tolist()
+            )
         else:
             return self._frame.copy()
 
     def iter(self) -> tp.Iterator[Event]:
-        """Iterate over rows of the DataFrame to yield Event objects.
-        """
+        """Iterate over rows of the DataFrame to yield Event objects."""
         for row in self._frame.itertuples(index=False):
             event_class: tp.Type[Event] = self.CLASS_KIND_MAPPING[row.kind]
             yield event_class.from_dict(row._asdict())
@@ -623,12 +674,19 @@ class EventAccessor:
 
         See `_merge_blocks`.
         """
-        blocks_df = self._frame[self._frame.kind == 'block']
+        blocks_df = self._frame[self._frame.kind == "block"]
         return _merge_blocks(blocks_df, min_block_duration_s=min_block_duration_s)
 
-    def plot(self, window_s: float = 30.0, ax: tp.Optional[tp.Any] = None, show_desc: bool = True,
-             desc_cropping_s: float = 0, desc_fontsize: float = 7, figsize: tuple = (10, 10),
-             print_summary: bool = True) -> tp.Tuple[tp.Any, tp.Any]:
+    def plot(
+        self,
+        window_s: float = 30.0,
+        ax: tp.Optional[tp.Any] = None,
+        show_desc: bool = True,
+        desc_cropping_s: float = 0,
+        desc_fontsize: float = 7,
+        figsize: tuple = (10, 10),
+        print_summary: bool = True,
+    ) -> tp.Tuple[tp.Any, tp.Any]:
         """Plot events for visual assessment of alignment.
 
         See `bm.viz.plot_events`.
@@ -636,7 +694,13 @@ class EventAccessor:
         from .viz import plot_events
 
         fig, ax = plot_events(
-            self._frame, window_s=window_s, ax=ax, show_desc=show_desc,
-            desc_cropping_s=desc_cropping_s, desc_fontsize=desc_fontsize, figsize=figsize,
-            print_summary=print_summary)
+            self._frame,
+            window_s=window_s,
+            ax=ax,
+            show_desc=show_desc,
+            desc_cropping_s=desc_cropping_s,
+            desc_fontsize=desc_fontsize,
+            figsize=figsize,
+            print_summary=print_summary,
+        )
         return fig, ax
