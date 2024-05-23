@@ -24,3 +24,4 @@ submitit_*/
 /.venv
 .conda_config
 *.ipynb
+.tmp/

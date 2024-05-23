@@ -6,21 +6,25 @@
 
 import copy
 import inspect
-from pathlib import Path
+import logging
 import typing as tp
-import mne
-import yaml
-import pandas as pd
-import numpy as np
-import torch
+from pathlib import Path
+
 import julius
+import mne
+import numpy as np
+import pandas as pd
+import torch
+import yaml
+
 import bm
 from bm import env
 
+logger = logging.getLogger(__name__)
+
 
 def _give_permission(filepath: tp.Optional[Path]) -> None:
-    """Set 777 permissions for sharing more easily
-    """
+    """Set 777 permissions for sharing more easily"""
     if filepath is not None and filepath.exists():  # for sharing
         try:
             filepath.chmod(0o777)
@@ -39,7 +43,7 @@ def from_selection(selection: tp.Dict[str, tp.Any]) -> tp.Iterator["Recording"]:
 
     Example
     -------
-    from_selection({"study": "schoffelen2019, "modality": "audio"})
+    from_selection({"study": "schoffelen2019", "modality": "audio"})
     """
     params = dict(selection)
     name = params.pop("study")
@@ -60,6 +64,7 @@ class Recording:
     recording_index: int
         the index of the recording, across all recordings and studies.
     """
+
     data_url: str
     paper_url: str
     doi: str
@@ -94,31 +99,41 @@ class Recording:
     def __init_subclass__(cls) -> None:
         """Record all existing recording classes"""
         super().__init_subclass__()
-        if cls.__name__.startswith('_'):
+        if cls.__name__.startswith("_"):
             return  # for base classes
         name = cls.study_name()
         register[name] = cls
-        expected_name = cls.__module__.rsplit('.', maxsplit=1)[-1]
+        expected_name = cls.__module__.rsplit(".", maxsplit=1)[-1]
         assert name == expected_name, (
-            f"Study {name} is defined in {expected_name} "
-            "instead of its using name.")
+            f"Study {name} is defined in {expected_name} " "instead of its using name."
+        )
         register[cls.study_name()] = cls
         # check that Recording has correct information
         compulsory_keys = (
-            'data_url', 'paper_url', 'doi', 'licence', 'modality',
-            'language', 'device', 'description'
+            "data_url",
+            "paper_url",
+            "doi",
+            "licence",
+            "modality",
+            "language",
+            "device",
+            "description",
         )
         for key in compulsory_keys:
             assert isinstance(getattr(cls, key), str)
 
         # check that Recording.list API is correct
         params = list(inspect.signature(cls.iter).parameters.keys())
-        assert "study" not in params, ('"study" is a reserved name which cannot be used as '
-                                       f'a parameter of {cls.__name__}.iter.')
+        assert "study" not in params, (
+            '"study" is a reserved name which cannot be used as '
+            f"a parameter of {cls.__name__}.iter."
+        )
 
     def __init__(self, *, subject_uid: str, recording_uid: str) -> None:
         if not isinstance(subject_uid, str):
-            raise TypeError(f"Recording.subject_uid needs to be a str instance, got: {subject_uid}")
+            raise TypeError(
+                f"Recording.subject_uid needs to be a str instance, got: {subject_uid}"
+            )
         self.subject_uid = subject_uid
         self.recording_uid = recording_uid
         self._subject_index: tp.Optional[int] = None  # specified during training
@@ -131,7 +146,9 @@ class Recording:
         if env.cache is None:
             self._cache_folder: tp.Optional[Path] = None
         else:
-            self._cache_folder = env.cache / "studies" / self.study_name() / recording_uid
+            self._cache_folder = (
+                env.cache / "studies" / self.study_name() / recording_uid
+            )
             self._cache_folder.mkdir(parents=True, exist_ok=True, mode=0o777)
 
     def empty_copy(self: R) -> R:
@@ -174,8 +191,7 @@ class Recording:
         return next(iter(self._arrays.values())) if self._arrays else self.raw()
 
     def raw(self) -> mne.io.RawArray:
-        """Loads, caches and returns the raw for the subject
-        """
+        """Loads, caches and returns the raw for the subject"""
         key = (0, 0.0)  # 0 for raw
         if key not in self._arrays:
             raw = self._load_raw()
@@ -189,10 +205,11 @@ class Recording:
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self.recording_uid!r})"
 
-    def preprocessed(self, sample_rate: tp.Optional[float] = None,
-                     highpass: float = 0) -> mne.io.RawArray:
+    def preprocessed(
+        self, sample_rate: tp.Optional[float] = None, highpass: float = 0
+    ) -> mne.io.RawArray:
         """Creates and/or loads the data at a given sampling rate.
-        1200Hz sample_rate with no highpass (0) would returns the raw,
+        1200Hz sample_rate with no highpass (0) would return the raw,
         different values would create a subsampled fif file and load it from the cache.
 
         Parameter
@@ -202,11 +219,9 @@ class Recording:
         highpass: float
             the frequency of the highpass filter (no high pass filter if 0)
         """
-        if sample_rate is not None and sample_rate != int(sample_rate):
-            raise ValueError(
-                "For simplicity's sake, only integer sampling rates in Hz are allowed")
-        sample_rate = int(sample_rate) if sample_rate is not None else 0
-        key: tp.Tuple[int, float] = (sample_rate, highpass)
+        if sample_rate is None:
+            sample_rate = 0
+        key: tp.Tuple[float, float] = (sample_rate, highpass)
         if key in self._arrays:
             return self._arrays[key]
         name = f"meg-sr{sample_rate}-hp{highpass}-raw.fif"
@@ -222,11 +237,15 @@ class Recording:
             return self._arrays[key]
         # still not available, so preprocess
         if self._cache_folder is None:
-            raise RuntimeError("No cache folder provided for intermediate "
-                               f"(subsampled at {sample_rate}Hz) storage.")
+            raise RuntimeError(
+                "No cache folder provided for intermediate "
+                f"(subsampled at {sample_rate}Hz) storage."
+            )
         assert filepath is not None
         if not filepath.exists():
-            low_mne = preprocess_mne(self.raw(), sample_rate=sample_rate, highpass=highpass)
+            low_mne = preprocess_mne(
+                self.raw(), sample_rate=sample_rate, highpass=highpass
+            )
             low_mne.save(str(filepath), overwrite=True)
             _give_permission(filepath)  # for sharing
         self._arrays[key] = mne.io.read_raw_fif(str(filepath), preload=False)
@@ -266,6 +285,7 @@ class Recording:
         events = self._events
 
         return events
+
 
 #     def get_super_blocks(self, num_super_blocks: tp.Optional[int] = None,
 #                          sentence_blocks: bool = False) -> tp.Dict[int, tp.Tuple[float, float]]:
@@ -333,34 +353,40 @@ class Recording:
 
 def preprocess_mne(
     raw: mne.io.RawArray,
-    sample_rate: int = 200,
+    sample_rate: float = 200,
     highpass: float = 0,
 ) -> mne.io.RawArray:
     """Creates a new mne.io.RawArray at another sampling rate
     Parameter:
     raw: mne.io.RawArray
         the mne array to resample
-    sample_rate: int
+    sample_rate: float
         the required sample rate for the new mne array
     highpass: int
         the frequency of the highpass filter (no high pass filter if 0)
     """
-    data = torch.Tensor(raw.get_data())
-    old_sr = int(np.round(raw.info["sfreq"]))
+    old_sr = raw.info["sfreq"]
     if sample_rate > old_sr:
-        raise ValueError("The sample rate should be below "
-                         f"{old_sr}Hz, got {sample_rate}")
-    resamp = julius.ResampleFrac(old_sr=old_sr, new_sr=sample_rate)
-    data = resamp(data)
-    if highpass:
-        data -= julius.lowpass_filter(data, highpass / sample_rate)
+        logger.warning(
+            f"Data sample rate is {old_sr}Hz so it is not subsampled to {sample_rate}Hz"
+        )
+        return raw
+    else:
+        # raise ValueError(
+        #     f"The sample rate should be below {old_sr}Hz, got {sample_rate}Hz"
+        # )
+        data = torch.Tensor(raw.get_data())
+        resamp = julius.ResampleFrac(old_sr=old_sr, new_sr=sample_rate)
+        data = resamp(data)
+        if highpass:
+            data -= julius.lowpass_filter(data, highpass / sample_rate)
 
-    info_kwargs = dict(raw.info)
-    info_kwargs['sfreq'] = sample_rate
-    info = mne.Info(**info_kwargs)
-    # check that layout works
-    layout = mne.find_layout(info)  # noqa
-    return mne.io.RawArray(data.numpy(), info=info)
+        info_kwargs = dict(raw.info)
+        info_kwargs["sfreq"] = sample_rate
+        info = mne.Info(**info_kwargs)
+        # check that layout works
+        layout = mne.find_layout(info)  # noqa
+        return mne.io.RawArray(data.numpy(), info=info)
 
 
 def list_selections() -> tp.List[tp.Tuple[tp.Type[Recording], tp.Dict[str, tp.Any]]]:
@@ -371,7 +397,9 @@ def list_selections() -> tp.List[tp.Tuple[tp.Type[Recording], tp.Dict[str, tp.An
     list
         list of elements (RecordingType, subparameters)
     """
-    fp = Path(bm.__file__).parent / "conf" / "selections" / "selections_definitions.yaml"
+    fp = (
+        Path(bm.__file__).parent / "conf" / "selections" / "selections_definitions.yaml"
+    )
     assert fp.exists(), f"Unknown file {fp}"
     with fp.open() as f:
         content = yaml.safe_load(f)

@@ -2,7 +2,10 @@ import os
 import typing as tp
 
 import h5py
+import numpy as np
 import pandas as pd
+from mne import create_info
+from mne.io.array import RawArray
 
 from . import api, utils
 from .textgrids import TextGrid
@@ -45,6 +48,7 @@ class Lebel2023Recording(api.Recording):
 
     def __init__(self, subject_uid: str, recording_uid: str) -> None:
         super().__init__(subject_uid=subject_uid, recording_uid=recording_uid)
+        self.tr = 2
         self.path = utils.StudyPaths(Lebel2023Recording.study_name())
         self.preproc_path = self.path.download / "derivative" / "preprocessed_data"
         self.img_path = (
@@ -58,17 +62,30 @@ class Lebel2023Recording(api.Recording):
         )
 
     def _load_raw(self):
-        return h5py.File(self.img_path, "r")["data"][...]
+        data = h5py.File(self.img_path, "r")["data"][...].T
+        return RawArray(
+            data,
+            create_info(
+                ch_names=data.shape[0],
+                sfreq=1 / self.tr,
+                ch_types="eeg",
+            ),
+            verbose=False,
+        )
 
     def _load_events(self) -> pd.DataFrame:
         df = TextGrid(self.event_path).get_transcript()
-        block = {
-            "start": [df.start.min()],
-            "kind": ["block"],
-            "stop": [df.stop.max()],
-            "duration": [df.stop.max() - df.start.min()],
-        }
-        df = pd.concat([pd.DataFrame(block), df], ignore_index=True)
+        blocks = pd.DataFrame(
+            np.arange(
+                df.start.min() // self.tr * self.tr,
+                df.start.max() // self.tr * self.tr + self.tr,
+                self.tr,
+            ),
+            columns=["start"],
+        )
+        blocks["stop"] = blocks.start + self.tr
+        blocks[["kind", "duration"]] = "block", self.tr
+        df = pd.concat([blocks, df], ignore_index=True)
         filepath = self.path.download / "stimuli" / f"{self.recording_uid}.wav"
         filepath = filepath.relative_to(os.getcwd())
         df[["filepath", "language", "modality", "uid"]] = (
@@ -77,4 +94,5 @@ class Lebel2023Recording(api.Recording):
             "audio",
             self.recording_uid,
         )
-        return df.event.validate()
+        df.event.validate()
+        return df.sort_values("start")

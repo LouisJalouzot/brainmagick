@@ -240,23 +240,27 @@ class TextGrid(object):
             .dropna()
         )
         sentences["sequence_id"] = sentences.index
-        phonemes = phonemes[~phonemes.phoneme.isin(DEFAULT_BAD_WORDS)].reset_index(
-            drop=True
-        )
         phonemes["phoneme_id"] = phonemes.index
-        words = words[~words.word.isin(DEFAULT_BAD_WORDS)].reset_index(drop=True)
-        words["word_index"] = words.index
+        words = words[
+            ~words.word.str.strip("{}").str.lower().isin(DEFAULT_BAD_WORDS)
+        ].reset_index(drop=True)
+        words["word_id"] = words.index
         words = pd.merge_asof(
             words, sentences.drop(columns="stop"), direction="backward"
         )
+        words["word_index"] = words.groupby("sequence_id").start.rank()
         word_sequence = (
             words.groupby("sequence_id")
             .word.apply(lambda x: x.str.cat(sep=" "))
             .reset_index(name="word_sequence")
         )
+        phonemes = phonemes[
+            ~phonemes.phoneme.str.strip("{}").str.lower().isin(DEFAULT_BAD_WORDS)
+        ].reset_index(drop=True)
         phonemes = pd.merge_asof(
             phonemes, words.drop(columns="stop"), direction="backward"
         )
+        phonemes["phoneme_index"] = phonemes.groupby("word_id").start.rank()
         sentences["kind"] = "sound"
         phonemes["kind"] = "phoneme"
         words["kind"] = "word"

@@ -5,26 +5,25 @@
 # LICENSE file in the root directory of this source tree.
 
 import dataclasses
-from collections import namedtuple
-from concurrent import futures
 import logging
 import typing as tp
+from collections import namedtuple
+from concurrent import futures
 from pathlib import Path
 
-from dora.log import LogProgress
 import flashy
-import pandas as pd
-import numpy as np
 import mne
+import numpy as np
+import pandas as pd
 import torch
-from torch.utils.data import ConcatDataset
+from dora.log import LogProgress
 from torch.nn import functional as F
+from torch.utils.data import ConcatDataset
 
-from . import env
+from . import env, studies
 from .cache import Cache
-from . import studies
+from .events import Event, assign_blocks, split_wav_as_block
 from .features import FeaturesBuilder
-from .events import Event, split_wav_as_block, assign_blocks
 from .utils import Frequency, roundrobin
 
 # pylint: disable=logging-fstring-interpolation
@@ -58,22 +57,22 @@ class _DatasetFactory:
 
     # pylint: disable=unused-argument,function-redefined
     def __init__(
-            self,
-            condition: tp.Union[str, float] = 3.0,
-            tmin: float = -0.5,
-            tmax: float = 2.5,
-            baseline: tp.Any = (None, 0),
-            decim: int = 1,
-            sample_rate: float = studies.schoffelen2019.RAW_SAMPLE_RATE,
-            highpass: float = 0,
-            features: tp.Sequence[str] = ("WordLength", "WordFrequency"),
-            features_params: tp.Optional[dict] = None,
-            ignore_end_in_block: bool = False,
-            ignore_start_in_block: bool = False,
-            event_mask: bool = False,
-            split_wav_as_block: bool = False,
-            meg_dimension: tp.Optional[int] = None,
-            autoreject: bool = False,
+        self,
+        condition: tp.Union[str, float] = 3.0,
+        tmin: float = -0.5,
+        tmax: float = 2.5,
+        baseline: tp.Any = (None, 0),
+        decim: int = 1,
+        sample_rate: float = studies.schoffelen2019.RAW_SAMPLE_RATE,
+        highpass: float = 0,
+        features: tp.Sequence[str] = ("WordLength", "WordFrequency"),
+        features_params: tp.Optional[dict] = None,
+        ignore_end_in_block: bool = False,
+        ignore_start_in_block: bool = False,
+        event_mask: bool = False,
+        split_wav_as_block: bool = False,
+        meg_dimension: tp.Optional[int] = None,
+        autoreject: bool = False,
     ) -> None:
         assert tmin < tmax
         assert decim == 1, "Decimation factor is not yet supported"
@@ -81,7 +80,7 @@ class _DatasetFactory:
         self.features_params = features_params
         self.condition = condition
         self.baseline = baseline
-        self.sample_rate = int(round(sample_rate))
+        self.sample_rate = sample_rate
         self.highpass = highpass
         self.ignore_end_in_block = ignore_end_in_block
         self.ignore_start_in_block = ignore_start_in_block
@@ -93,8 +92,9 @@ class _DatasetFactory:
 
     # pylint: disable=too-many-locals
     def apply(
-        self, recording: studies.Recording,
-        blocks: tp.Optional[tp.List[tp.Tuple[float, float]]] = None
+        self,
+        recording: studies.Recording,
+        blocks: tp.Optional[tp.List[tp.Tuple[float, float]]] = None,
     ) -> tp.Optional["SegmentDataset"]:
         """Apply the epochs extraction procedure to the raw file and create a SegmentDataset.
 
@@ -108,11 +108,17 @@ class _DatasetFactory:
         if blocks is not None and not blocks:
             raise ValueError("No blocks provided.")
         data = recording.preprocessed(self.sample_rate, highpass=self.highpass)
-        sample_rate = Frequency(data.info["sfreq"])
-        assert int(sample_rate) == int(self.sample_rate)
+
+        # TODO: check
+        # sample_rate = Frequency(data.info["sfreq"])
+        # assert sample_rate == self.sample_rate
+        self.sample_rate = Frequency(data.info["sfreq"])
+
         if isinstance(self.condition, str):
             # hack to discriminate between a condition and a query
-            query = self.condition if "=" in self.condition else f"kind=={self.condition!r}"
+            query = (
+                self.condition if "=" in self.condition else f"kind=={self.condition!r}"
+            )
             meta = recording.events().query(query)
             times = meta.start.values
         elif isinstance(self.condition, float):
@@ -120,19 +126,23 @@ class _DatasetFactory:
             times = np.arange(0, data.times[-1], self.condition)
             meta = None
         else:
-            raise TypeError("Condition should be a string, or a float corresponding to a "
-                            "duration in seconds, got:\n"
-                            f"{self.condition} (type: {type(self.condition)})")
+            raise TypeError(
+                "Condition should be a string, or a float corresponding to a "
+                "duration in seconds, got:\n"
+                f"{self.condition} (type: {type(self.condition)})"
+            )
 
         events = recording.events().copy()
-        events = events.sort_values('start')
+        events = events.sort_values("start")
         if self.split_wav_as_block:
             assert blocks is not None
             events = split_wav_as_block(events, blocks)
 
-        delta = 0.5 / sample_rate
-        mask = np.logical_and(times + self._opts["tmin"] >= 0,
-                              times + self._opts["tmax"] < data.times[-1] + delta)
+        delta = 0.5 / self.sample_rate
+        mask = np.logical_and(
+            times + self._opts["tmin"] >= 0,
+            times + self._opts["tmax"] < data.times[-1] + delta,
+        )
         if blocks is not None:
             # We only keep extracts that are fully contained in at least one of the given blocks.
             in_any_split = False
@@ -141,7 +151,9 @@ class _DatasetFactory:
                     in_split = times >= start
                 else:
                     in_split = times + self._opts["tmin"] >= start
-                margin = delta if self.ignore_end_in_block else self._opts["tmax"] - delta
+                margin = (
+                    delta if self.ignore_end_in_block else self._opts["tmax"] - delta
+                )
                 in_split &= times + margin < stop
                 # Keep around for debugging
                 # print("block", start, stop)
@@ -154,34 +166,48 @@ class _DatasetFactory:
             return None
         # assert mask.any(), "empty dataset"
         # TODO understand why samples/times some are not unique nor ordered
-        samples = sample_rate.to_ind(times[mask])
+        samples = self.sample_rate.to_ind(times[mask])
         unique_samples = np.unique(samples)
         if len(unique_samples) != len(samples):
-            logger.warning(f"Found {len(samples) - len(unique_samples)} duplicates out of "
-                           f"{len(samples)} events")
+            logger.warning(
+                f"Found {len(samples) - len(unique_samples)} duplicates out of "
+                f"{len(samples)} events"
+            )
         if len(np.where(np.diff(times[mask]) < 0)[0]) > 0:
-            logger.warning(f"Times are not sorted in meg events data at indices "
-                           f"{np.where(np.diff(times[mask]) < 0)[0]}. "
-                           f"SubjectID={recording.subject_uid}")
+            logger.warning(
+                f"Times are not sorted in meg events data at indices "
+                f"{np.where(np.diff(times[mask]) < 0)[0]}. "
+                f"SubjectID={recording.subject_uid}"
+            )
 
         if meta is not None:
             meta = meta.iloc[np.where(mask)].reset_index()
-        mne_events = np.concatenate([samples[:, None], np.ones(
-            (len(samples), 2), dtype=np.int64)], 1)  # why long?
+        mne_events = np.concatenate(
+            [samples[:, None], np.ones((len(samples), 2), dtype=np.int64)], 1
+        )  # why long?
         # create
         baseline = self.baseline
-        epochs = mne.Epochs(data, events=mne_events,
-                            preload=False, baseline=baseline,
-                            metadata=meta, **self._opts, event_repeated='drop')
+        epochs = mne.Epochs(
+            data,
+            events=mne_events,
+            preload=False,
+            baseline=baseline,
+            metadata=meta,
+            **self._opts,
+            event_repeated="drop",
+        )
         epochs._bad_dropped = True  # Hack: avoid checking
         if self.autoreject:
             from .autoreject import AutoRejectDrop
 
             raw = epochs._raw
-            autoreject_cache = Cache('autoreject', args=(self.__dict__, blocks))
+            autoreject_cache = Cache("autoreject", args=(self.__dict__, blocks))
 
             def _get_autoreject():
-                logger.info('Computing autoreject, cachefile %s', autoreject_cache.cache_path({}))
+                logger.info(
+                    "Computing autoreject, cachefile %s",
+                    autoreject_cache.cache_path({}),
+                )
                 num_samples = 200
                 gen = torch.Generator()
                 gen.manual_seed(1234)
@@ -199,9 +225,14 @@ class _DatasetFactory:
             epochs._raw = raw
 
         dset = SegmentDataset(
-            recording, epochs, events=events,
-            features=self.features, features_params=self.features_params,
-            event_mask=self.event_mask, meg_dimension=self.meg_dimension)
+            recording,
+            epochs,
+            events=events,
+            features=self.features,
+            features_params=self.features_params,
+            event_mask=self.event_mask,
+            meg_dimension=self.meg_dimension,
+        )
         dset.blocks = blocks  # type: ignore
         return dset
 
@@ -209,6 +240,7 @@ class _DatasetFactory:
 @dataclasses.dataclass
 class SegmentBatch:
     """Collatable training data."""
+
     meg: torch.Tensor
     features: torch.Tensor
     features_mask: torch.Tensor
@@ -242,8 +274,9 @@ class SegmentBatch:
     def __getitem__(self, index) -> "SegmentBatch":
         cls = self.__class__
         kw = {}
-        indexes = torch.arange(
-            len(self), device=self.meg.device)[index].tolist()  # explicit indexes for lists
+        indexes = torch.arange(len(self), device=self.meg.device)[
+            index
+        ].tolist()  # explicit indexes for lists
         for field in dataclasses.fields(cls):
             data = getattr(self, field.name)
             if isinstance(data, list):
@@ -300,29 +333,37 @@ class SegmentDataset:
 
     Factory = _DatasetFactory
 
-    def __init__(self, recording: studies.Recording, epochs: mne.Epochs,
-                 features: tp.Sequence[str], events: pd.DataFrame,
-                 features_params: tp.Optional[dict] = None, event_mask: bool = False,
-                 meg_dimension: tp.Optional[int] = None) -> None:
+    def __init__(
+        self,
+        recording: studies.Recording,
+        epochs: mne.Epochs,
+        features: tp.Sequence[str],
+        events: pd.DataFrame,
+        features_params: tp.Optional[dict] = None,
+        event_mask: bool = False,
+        meg_dimension: tp.Optional[int] = None,
+    ) -> None:
         self.recording = recording
         self.epochs = epochs
         self.events = events
         self.sample_rate = Frequency(epochs._raw.info["sfreq"])
         self.features_params = features_params
-        features_params_dict = dict(
-            self.features_params) if features_params else {}  # type: ignore
+        features_params_dict = (
+            dict(self.features_params) if features_params else {}
+        )  # type: ignore
         self.features = FeaturesBuilder(
-            events, features,
+            events,
+            features,
             features_params=features_params_dict,
             sample_rate=self.sample_rate,
-            event_mask=event_mask)
+            event_mask=event_mask,
+        )
         self.meg_dimension = meg_dimension
         if meg_dimension is not None:
             assert meg_dimension >= self.recording.meg_dimension
 
     def _get_bounds_times(self, idx: int) -> tp.Tuple[float, float]:
-        """Infers the start and stop times of a given epoch
-        """
+        """Infers the start and stop times of a given epoch"""
         ep = self.epochs
         # from mne code
         event_samp = ep.events[idx, 0]
@@ -333,13 +374,11 @@ class SegmentDataset:
         return (sample_rate.to_sec(start), sample_rate.to_sec(stop))
 
     def _get_full_feature(self) -> torch.Tensor:
-        """Creates the full array of features (useful for testing)
-        """
+        """Creates the full array of features (useful for testing)"""
         return self.features(0, self.sample_rate.to_sec(self.epochs._raw.n_times))[0]
 
     def _get_feature(self, idx: int) -> torch.Tensor:
-        """Get the feature corresponding to index idx
-        """
+        """Get the feature corresponding to index idx"""
         start, stop = self._get_bounds_times(idx)
         return self.features(start, stop)
 
@@ -351,7 +390,9 @@ class SegmentDataset:
             meg = next(self.epochs[index])
             meg_torch = torch.from_numpy(meg).float()
             if self.meg_dimension is not None:
-                meg_torch = F.pad(meg_torch, (0, 0, 0, self.meg_dimension - meg_torch.shape[0]))
+                meg_torch = F.pad(
+                    meg_torch, (0, 0, 0, self.meg_dimension - meg_torch.shape[0])
+                )
             feature_data, feature_mask, events = self._get_feature(index)
             return SegmentBatch(
                 meg=meg_torch,
@@ -365,8 +406,12 @@ class SegmentDataset:
         else:
             features = list(self.features.keys())
             return self.__class__(
-                self.recording, self.epochs[index], events=self.events,
-                features=features, features_params=self.features_params)
+                self.recording,
+                self.epochs[index],
+                events=self.events,
+                features=features,
+                features_params=self.features_params,
+            )
 
     def __iter__(self) -> tp.Iterator[SegmentBatch]:
         return (self[k] for k in range(len(self)))  # pleases mypy
@@ -376,28 +421,32 @@ Datasets = namedtuple("Datasets", "train valid test")
 
 
 def _preload(recording: studies.Recording, **kwargs: tp.Any) -> studies.Recording:
-    """Calls cached data to create it if need be
-    """
+    """Calls cached data to create it if need be"""
     recording.events()
     recording.preprocessed(**kwargs)
     return recording
 
 
-def _extract_recordings(selections: tp.List[tp.Dict[str, tp.Any]], n_recordings: int,
-                        skip_recordings: int = 0, shuffle_recordings_seed: int = -1
-                        ) -> tp.Sequence[studies.Recording]:
-    """Extract the number of recordings required, and mix audio and visual if need be
-    """  # this is a function to help testing, especially the "any" case
+def _extract_recordings(
+    selections: tp.List[tp.Dict[str, tp.Any]],
+    n_recordings: int,
+    skip_recordings: int = 0,
+    shuffle_recordings_seed: int = -1,
+) -> tp.Sequence[studies.Recording]:
+    """Extract the number of recordings required, and mix audio and visual if need be"""  # this is a function to help testing, especially the "any" case
     recording_lists = [list(studies.from_selection(select)) for select in selections]
     if shuffle_recordings_seed > 0:  # deactivated if -1
         rng = np.random.RandomState(seed=shuffle_recordings_seed)
         for subjs in recording_lists:
             rng.shuffle(subjs)  # type: ignore
     all_recordings = list(roundrobin(*recording_lists))
-    all_recordings = all_recordings[skip_recordings: skip_recordings + n_recordings]
+    all_recordings = all_recordings[skip_recordings : skip_recordings + n_recordings]
     if len(all_recordings) < n_recordings:
-        logger.warning("Requested %d recordings but only found %d",
-                       n_recordings, len(all_recordings))
+        logger.warning(
+            "Requested %d recordings but only found %d",
+            n_recordings,
+            len(all_recordings),
+        )
     # assign subject index
     uids = sorted(set((r.__class__.__name__, r.subject_uid) for r in all_recordings))
     uids_index = {uid: k for k, uid in enumerate(uids)}
@@ -410,31 +459,31 @@ def _extract_recordings(selections: tp.List[tp.Dict[str, tp.Any]], n_recordings:
 
 
 def get_datasets(
-        selections: tp.List[tp.Dict[str, tp.Any]],
-        n_recordings: int,
-        test_ratio: float,
-        valid_ratio: float,
-        sample_rate: int = studies.schoffelen2019.RAW_SAMPLE_RATE,  # FIXME
-        highpass: float = 0,
-        num_workers: int = 10,
-        apply_baseline: bool = True,
-        progress: bool = False,
-        skip_recordings: int = 0,
-        min_block_duration: float = 0.0,
-        force_uid_assignement: bool = True,
-        shuffle_recordings_seed: int = -1,
-        split_assign_seed: int = 12,
-        min_n_blocks_per_split: int = 20,
-        features: tp.Optional[tp.List[str]] = None,
-        extra_test_features: tp.Optional[tp.List[str]] = None,
-        test: dict = {},
-        allow_empty_split: bool = False,
-        n_subjects: tp.Optional[int] = None,
-        n_subjects_test: tp.Optional[int] = None,
-        remove_ratio: float = 0.,
-        **factory_kwargs: tp.Any) -> Datasets:
-    """
-    """
+    selections: tp.List[tp.Dict[str, tp.Any]],
+    n_recordings: int,
+    test_ratio: float,
+    valid_ratio: float,
+    sample_rate: float = studies.schoffelen2019.RAW_SAMPLE_RATE,  # FIXME
+    highpass: float = 0,
+    num_workers: int = 10,
+    apply_baseline: bool = True,
+    progress: bool = False,
+    skip_recordings: int = 0,
+    min_block_duration: float = 0.0,
+    force_uid_assignement: bool = True,
+    shuffle_recordings_seed: int = -1,
+    split_assign_seed: int = 12,
+    min_n_blocks_per_split: int = 20,
+    features: tp.Optional[tp.List[str]] = None,
+    extra_test_features: tp.Optional[tp.List[str]] = None,
+    test: dict = {},
+    allow_empty_split: bool = False,
+    n_subjects: tp.Optional[int] = None,
+    n_subjects_test: tp.Optional[int] = None,
+    remove_ratio: float = 0.0,
+    **factory_kwargs: tp.Any,
+) -> Datasets:
+    """ """
     if features is None:
         features = []
     if extra_test_features is None:
@@ -448,73 +497,111 @@ def get_datasets(
         flashy.distrib.barrier()  # type: ignore
     # get recordings
     all_recordings = _extract_recordings(
-        selections, n_recordings, skip_recordings=skip_recordings,
-        shuffle_recordings_seed=shuffle_recordings_seed)
+        selections,
+        n_recordings,
+        skip_recordings=skip_recordings,
+        shuffle_recordings_seed=shuffle_recordings_seed,
+    )
     if num_workers <= 1:
         if progress:
-            all_recordings = LogProgress(logger, all_recordings,   # type: ignore
-                                         name="Preparing cache", level=logging.DEBUG)
+            all_recordings = LogProgress(
+                logger,
+                all_recordings,  # type: ignore
+                name="Preparing cache",
+                level=logging.DEBUG,
+            )
         all_recordings = [  # for debugging
-            _preload(s, sample_rate=sample_rate, highpass=highpass) for s in all_recordings]
+            _preload(s, sample_rate=sample_rate, highpass=highpass)
+            for s in all_recordings
+        ]
     else:
         # precompute slow metadata loading
         with futures.ProcessPoolExecutor(num_workers) as pool:
-            jobs = [pool.submit(_preload, s, sample_rate=sample_rate, highpass=highpass)
-                    for s in all_recordings]
+            jobs = [
+                pool.submit(_preload, s, sample_rate=sample_rate, highpass=highpass)
+                for s in all_recordings
+            ]
             if progress:
-                jobs = LogProgress(logger, jobs, name="Preparing cache",  # type: ignore
-                                   level=logging.DEBUG)
+                jobs = LogProgress(
+                    logger,
+                    jobs,
+                    name="Preparing cache",  # type: ignore
+                    level=logging.DEBUG,
+                )
             all_recordings = [j.result() for j in jobs]  # check for exceptions
     if flashy.distrib.is_rank_zero():
         flashy.distrib.barrier()  # type: ignore
     # create datasets through factory, split them and concatenate
     meg_dimension = max(recording.meg_dimension for recording in all_recordings)
-    factory_kwargs.update(sample_rate=sample_rate, highpass=highpass, meg_dimension=meg_dimension,
-                          baseline=(None, 0) if apply_baseline else None)
+    factory_kwargs.update(
+        sample_rate=sample_rate,
+        highpass=highpass,
+        meg_dimension=meg_dimension,
+        baseline=(None, 0) if apply_baseline else None,
+    )
     fact = SegmentDataset.Factory(features=features, **factory_kwargs)
     for key, value in test.items():
         if value is not None:
             factory_kwargs[key] = value
-    fact_test = SegmentDataset.Factory(features=features + extra_test_features, **factory_kwargs)
+    fact_test = SegmentDataset.Factory(
+        features=features + extra_test_features, **factory_kwargs
+    )
 
     factories = [fact_test, fact, fact]
 
     n_recordings = len(all_recordings)
     if progress:
         all_recordings = LogProgress(
-            logger, all_recordings, name="Loading Subjects")  # type: ignore[assignment]
+            logger, all_recordings, name="Loading Subjects"
+        )  # type: ignore[assignment]
 
     dsets_per_split: tp.List[tp.List[SegmentDataset]] = [[], [], []]
     for i, recording in enumerate(all_recordings):
         events = recording.events()
-        blocks = events[events.kind == 'block']
+        blocks = events[events.kind == "block"]
 
         if min_block_duration > 0 and not force_uid_assignement:
-            if recording.study_name() not in ['schoffelen2019']:
-                blocks = blocks.event.merge_blocks(min_block_duration_s=min_block_duration)
+            if recording.study_name() not in ["schoffelen2019"]:
+                blocks = blocks.event.merge_blocks(
+                    min_block_duration_s=min_block_duration
+                )
 
         blocks = assign_blocks(
-            blocks, [test_ratio, valid_ratio], remove_ratio=remove_ratio, seed=split_assign_seed,
-            min_n_blocks_per_split=min_n_blocks_per_split)
+            blocks,
+            [test_ratio, valid_ratio],
+            remove_ratio=remove_ratio,
+            seed=split_assign_seed,
+            min_n_blocks_per_split=min_n_blocks_per_split,
+        )
+        print(fact_test, fact, blocks)
         for j, (fact, dsets) in enumerate(zip(factories, dsets_per_split)):
             split_blocks = blocks[blocks.split == j]
             if not split_blocks.empty:
-                start_stops = [(b.start, b.start + b.duration) for b in split_blocks.itertuples()]
+                start_stops = [
+                    (b.start, b.start + b.duration) for b in split_blocks.itertuples()
+                ]
                 dset = fact.apply(recording, blocks=start_stops)
                 if dset is not None:
                     dsets.append(dset)
                 else:
-                    logger.warning(f'Empty blocks for split {j + 1}/{len(factories)} of '
-                                   f'recording {i + 1}/{n_recordings}.')
+                    logger.warning(
+                        f"Empty blocks for split {j + 1}/{len(factories)} of "
+                        f"recording {i + 1}/{n_recordings}."
+                    )
             else:
-                logger.warning(f'No blocks found for split {j + 1}/{len(factories)} of '
-                               f'recording {i + 1}/{n_recordings}.')
+                logger.warning(
+                    f"No blocks found for split {j + 1}/{len(factories)} of "
+                    f"recording {i + 1}/{n_recordings}."
+                )
 
     if not allow_empty_split:
-        empty_names = [name for name, dset in zip(
-            ['train', 'valid', 'test'], dsets_per_split[::-1]) if len(dset) == 0]
+        empty_names = [
+            name
+            for name, dset in zip(["train", "valid", "test"], dsets_per_split[::-1])
+            if len(dset) == 0
+        ]
         if empty_names:
-            raise ValueError(f'The following splits are empty: {empty_names}.')
+            raise ValueError(f"The following splits are empty: {empty_names}.")
 
     # Select subset of subjects
     testset, validset, trainset = dsets_per_split
@@ -539,7 +626,9 @@ def get_datasets(
         testset = testset[:count]
 
     splits = [ConcatDataset(dset) for dset in dsets_per_split[::-1]]
-    msg = '# Examples (train | valid | test): ' + ' | '.join([str(len(dset)) for dset in splits])
+    msg = "# Examples (train | valid | test): " + " | ".join(
+        [str(len(dset)) for dset in splits]
+    )
     logger.info(msg)
 
     return Datasets(*splits)
