@@ -25,3 +25,4 @@ submitit_*/
 .conda_config
 *.ipynb
 .tmp/
+test.sh

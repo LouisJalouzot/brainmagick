@@ -10,20 +10,19 @@ files, using Gentle. There seems to a significant discrepency on the
 result of run_15 around 170 s.
 """
 import json
+import re
 import typing as tp
 from urllib.request import urlretrieve
 from zipfile import ZipFile
 
 import mne
-import re
 import numpy as np
 import pandas as pd
-from scipy.io import loadmat
 import spacy
+from scipy.io import loadmat
 
-from . import api, utils
 from ..events import extract_sequence_info
-
+from . import api, utils
 
 SPACY_MODEL = "en_core_web_md"
 
@@ -207,7 +206,7 @@ class _BroderickMetadata:
             idx = json.kind == kind
             json.loc[idx, kind] = json.loc[idx].string
 
-        json.loc[json.kind == 'phoneme', 'phoneme_id'] = 0  # Add dummy phoneme_id
+        json.loc[json.kind == "phoneme", "phoneme_id"] = 0  # Add dummy phoneme_id
 
         return json
 
@@ -236,9 +235,7 @@ class Broderick2019Recording(api.Recording):
 
         files = list((paths.download / "Natural Speech" / "EEG").iterdir())
         subjects = [
-            int(f.name.split("Subject")[1])
-            for f in files
-            if "Subject" in f.name
+            int(f.name.split("Subject")[1]) for f in files if "Subject" in f.name
         ]
         subjects = sorted(subjects)
 
@@ -275,15 +272,11 @@ class Broderick2019Recording(api.Recording):
         raw.set_montage(montage)
 
         # TODO make mastoids EEG and add layout position
-        info_mas = mne.create_info(
-            ["mastoids1", "mastoids2"], 128.0, ["misc", "misc"]
-        )
+        info_mas = mne.create_info(["mastoids1", "mastoids2"], 128.0, ["misc", "misc"])
         mastoids = mne.io.RawArray(mat["mastoids"].T * 1e6, info_mas)
         raw.add_channels([mastoids])
 
-        raw = raw.pick_types(
-            meg=False, eeg=True, misc=False, eog=False, stim=False
-        )
+        raw = raw.pick(["meg", "eeg"])
         return raw
 
     def _load_events(self) -> pd.DataFrame:
@@ -291,8 +284,8 @@ class Broderick2019Recording(api.Recording):
         # the files were shared manually and aligned with gentle
         events = self._metadata(self.run_id)
 
-        events[['language', 'modality']] = self.language, self.modality
+        events[["language", "modality"]] = self.language, self.modality
         events = extract_sequence_info(events, phoneme=False)
-        events = events.event.create_blocks(groupby='sentence')
+        events = events.event.create_blocks(groupby="sentence")
 
         return events

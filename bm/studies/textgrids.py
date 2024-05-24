@@ -226,31 +226,20 @@ class TextGrid(object):
         for c in ["start", "stop"]:
             phonemes[c] = phonemes[c].astype(float)
             words[c] = words[c].astype(float)
-        sentences = (
-            words[words.word == "sp"]
-            .stop.to_frame(name="start")
-            .reset_index(drop=True)
-            .iloc[:-1]
-        )
-        sentences["stop"] = (
-            words[words.word == "sp"]
-            .start.to_frame(name="stop")
-            .shift(-1)
-            .reset_index(drop=True)
-            .dropna()
-        )
-        sentences["sequence_id"] = sentences.index
+        sep = words[words.word == "sp"].copy()
+        sep["mid_sep"] = (sep.start + sep.stop) / 2
+        blocks = sep.mid_sep.to_frame(name="start").reset_index(drop=True).iloc[:-1]
+        blocks["stop"] = sep.mid_sep.shift(-1).dropna().reset_index(drop=True)
+        blocks["block_id"] = blocks.index
         phonemes["phoneme_id"] = phonemes.index
         words = words[
             ~words.word.str.strip("{}").str.lower().isin(DEFAULT_BAD_WORDS)
         ].reset_index(drop=True)
         words["word_id"] = words.index
-        words = pd.merge_asof(
-            words, sentences.drop(columns="stop"), direction="backward"
-        )
-        words["word_index"] = words.groupby("sequence_id").start.rank()
+        words = pd.merge_asof(words, blocks.drop(columns="stop"), direction="backward")
+        words["word_index"] = words.groupby("block_id").start.rank()
         word_sequence = (
-            words.groupby("sequence_id")
+            words.groupby("block_id")
             .word.apply(lambda x: x.str.cat(sep=" "))
             .reset_index(name="word_sequence")
         )
@@ -261,16 +250,17 @@ class TextGrid(object):
             phonemes, words.drop(columns="stop"), direction="backward"
         )
         phonemes["phoneme_index"] = phonemes.groupby("word_id").start.rank()
-        sentences["kind"] = "sound"
+        blocks["kind"] = "block"
         phonemes["kind"] = "phoneme"
         words["kind"] = "word"
         df = (
-            pd.concat([sentences, words, phonemes])
+            pd.concat([blocks, words, phonemes])
             .sort_values("start")
             .reset_index(drop=True)
         )
         df["duration"] = df.stop - df.start
         df = df.merge(word_sequence)
+        df["uid"] = df.word_sequence
         return df
 
 

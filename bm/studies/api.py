@@ -195,7 +195,7 @@ class Recording:
         key = (0, 0.0)  # 0 for raw
         if key not in self._arrays:
             raw = self._load_raw()
-            raw = raw.pick_types(eeg=True, meg=True, ref_meg=True, stim=False)
+            raw = raw.pick(["eeg", "meg", "ref_meg"])
             self._arrays[key] = raw
             self.mne_info  # populate mne info cache
         return self._arrays[key]

@@ -69,30 +69,39 @@ class Lebel2023Recording(api.Recording):
                 ch_names=data.shape[0],
                 sfreq=1 / self.tr,
                 ch_types="eeg",
+                verbose=False,
             ),
             verbose=False,
         )
 
     def _load_events(self) -> pd.DataFrame:
         df = TextGrid(self.event_path).get_transcript()
-        blocks = pd.DataFrame(
-            np.arange(
-                df.start.min() // self.tr * self.tr,
-                df.start.max() // self.tr * self.tr + self.tr,
-                self.tr,
-            ),
-            columns=["start"],
-        )
-        blocks["stop"] = blocks.start + self.tr
-        blocks[["kind", "duration"]] = "block", self.tr
-        df = pd.concat([blocks, df], ignore_index=True)
+        # blocks = pd.DataFrame(
+        #     np.arange(
+        #         df.start.min() // self.tr * self.tr,
+        #         df.start.max() // self.tr * self.tr + self.tr,
+        #         self.tr,
+        #     ),
+        #     columns=["start"],
+        # )
+        # blocks["stop"] = blocks.start + self.tr
+        # blocks[["kind", "duration"]] = "block", self.tr
+        # blocks["uid"] = blocks.index
+        # block = pd.DataFrame(
+        #     {
+        #         "start": [df.start.min()],
+        #         "stop": [df.stop.max()],
+        #         "duration": [df.stop.max() - df.start.min()],
+        #         "kind": ["block"],
+        #         "uid": [self.recording_uid],
+        #     }
+        # )
+        # df = pd.concat([blocks, df], ignore_index=True)
         filepath = self.path.download / "stimuli" / f"{self.recording_uid}.wav"
-        filepath = filepath.relative_to(os.getcwd())
-        df[["filepath", "language", "modality", "uid"]] = (
+        df[["filepath", "language", "modality"]] = (
             str(filepath),
             "en",
             "audio",
-            self.recording_uid,
         )
         df.event.validate()
         return df.sort_values("start")

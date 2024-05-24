@@ -22,10 +22,9 @@ import mne
 import pandas as pd
 from mne_bids import BIDSPath, read_raw_bids
 
-from . import api
-from . import utils
-from .download import download_osf
 from ..events import extract_sequence_info
+from . import api, utils
+from .download import download_osf
 
 
 class StudyPaths(utils.StudyPaths):
@@ -43,7 +42,7 @@ class Gwilliams2022Recording(api.Recording):
     data_url += "1u1l4oX_OfammKPT49OlgbAmjGGuaA4qE"
     paper_url = "https://www.biorxiv.org/content/10.1101/2020.04.04.025684v2"
     doi = "https://doi.org/10.1101/2020.04.04.025684"
-    licence = ''
+    licence = ""
     modality = "audio"
     language = "en"
     device = "meg"
@@ -51,9 +50,9 @@ class Gwilliams2022Recording(api.Recording):
 
     @classmethod
     def download(cls) -> None:
-        download_osf('ag3kj', StudyPaths().download.parent, 'ag3kj')
-        download_osf('h2tzn', StudyPaths().download.parent, 'h2tzn')
-        download_osf('u5327', StudyPaths().download.parent, 'u5327')
+        download_osf("ag3kj", StudyPaths().download.parent, "ag3kj")
+        download_osf("h2tzn", StudyPaths().download.parent, "h2tzn")
+        download_osf("u5327", StudyPaths().download.parent, "u5327")
 
     # pytest: disable=arguments-differ
     @classmethod
@@ -87,7 +86,7 @@ class Gwilliams2022Recording(api.Recording):
             yield recording
 
     def __init__(self, subject_uid: str, session: str, story: str) -> None:
-        recording_uid = f'{subject_uid}_session{session}_story{story}'
+        recording_uid = f"{subject_uid}_session{session}_story{story}"
         super().__init__(subject_uid=subject_uid, recording_uid=recording_uid)
         # FIXME in this dataset, the "task" is the story. The task is alway audio.
         self.story = story
@@ -104,8 +103,7 @@ class Gwilliams2022Recording(api.Recording):
         )
         raw = read_raw_bids(bids_path)  # FIXME this is NOT a lazy read
         self.raw_sample_rate = raw.info["sfreq"]
-        picks = dict(meg=True, eeg=False, stim=False, eog=False, ecg=False, misc=False)
-        raw = raw.pick_types(**picks)
+        raw = raw.pick(["meg"])
         return raw
 
     def _load_events(self) -> pd.DataFrame:
@@ -121,16 +119,16 @@ class Gwilliams2022Recording(api.Recording):
         events = list()
         for annot in raw.annotations:
             event = eval(annot.pop("description"))
-            event['start'] = annot['onset']
-            event['duration'] = annot['duration']
+            event["start"] = annot["onset"]
+            event["duration"] = annot["duration"]
             if event["kind"] == "sound":
                 stem, _, ext = event["sound"].lower().rsplit(".", 2)
                 event["filepath"] = paths.download / (stem + "." + ext)
             events.append(event)
 
         events_df = pd.DataFrame(events)
-        events_df[['language', 'modality']] = 'english', 'audio'
+        events_df[["language", "modality"]] = "english", "audio"
         events_df = extract_sequence_info(events_df)
-        events_df = events_df.event.create_blocks(groupby='sentence')
+        events_df = events_df.event.create_blocks(groupby="sentence")
 
         return events_df

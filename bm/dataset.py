@@ -573,7 +573,6 @@ def get_datasets(
             seed=split_assign_seed,
             min_n_blocks_per_split=min_n_blocks_per_split,
         )
-        print(fact_test, fact, blocks)
         for j, (fact, dsets) in enumerate(zip(factories, dsets_per_split)):
             split_blocks = blocks[blocks.split == j]
             if not split_blocks.empty:
