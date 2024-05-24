@@ -9,7 +9,7 @@ from .._explorers import ClipExplorer
 def explorer(launcher):
     launcher.slurm_(
         gpus=2,
-        mem_per_gpu=200,
+        mem_per_gpu=100,
         partition="gpu",
     )
     # See conf/model/clip_conv.yaml for the configuration used.
